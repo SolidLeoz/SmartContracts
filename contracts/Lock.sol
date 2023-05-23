@@ -8,6 +8,28 @@ import "hardhat/console.sol";
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 
 
+//interface pancakeFactory
+interface IPancakeFactory {
+    event PairCreated(address indexed token0, address indexed token1, address pair, uint256);
+
+    function feeTo() external view returns (address);
+
+    function feeToSetter() external view returns (address);
+
+    function getPair(address tokenA, address tokenB) external view returns (address pair);
+
+    function allPairs(uint256) external view returns (address pair);
+
+    function allPairsLength() external view returns (uint256);
+
+    function createPair(address tokenA, address tokenB) external returns (address pair);
+
+    function setFeeTo(address) external;
+
+    function setFeeToSetter(address) external;
+
+    function INIT_CODE_PAIR_HASH() external view returns (bytes32);
+}
 
 //interface pancakeRouter1
 interface IPancakeRouter01 {
@@ -146,10 +168,11 @@ interface IPancakeRouter02 is IPancakeRouter01 {
     ) external;
 }
 
-//Token Contract
-contract MyToken is IERC20 {
+contract Lock is IERC20 {
     using SafeMath for uint256;
+    //interfacePancake
     IPancakeRouter02 private pancakeRouter;
+    IPancakeFactory private pancakeFactory;
 
     // Token information
     string private _name;
@@ -219,6 +242,9 @@ contract MyToken is IERC20 {
         // Inizialize router PancakeSwap
         //NB: confirm the address of pancakeswapRouterV2
         pancakeRouter = IPancakeRouter02(0x10ED43C718714eb63d5aA57B78B54704E256024E);
+        // Inizialize PancakeFactory
+        //NB: confirm the address of pancakeswapRouterV2
+        pancakeFactory = IPancakeFactory(0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73);
     }
 
     // Returns the name of the token
@@ -397,6 +423,48 @@ contract MyToken is IERC20 {
     // Returns the balance of the specified account
     function balanceOf(address account) public view override returns (uint256) {
         return _balances[account];
+    }
+
+    // Pancake factory Pair 
+    function createPair(address tokenA, address tokenB) external {
+        // Utilizza il metodo createPair del Factory Contract
+        pancakeFactory.createPair(tokenA, tokenB);
+    }
+
+    // gret Factory Pair
+    function getPair(address tokenA, address tokenB) external view returns (address) {
+        // Utilizza il metodo getPair del Factory Contract
+        return pancakeFactory.getPair(tokenA, tokenB);
+    }
+
+
+    //Pancake swapToken
+    function swapTokensForTokens(
+    address tokenIn,
+    uint256 amountIn,
+    address tokenOut,
+    uint256 amountOutMin,
+    address to,
+    uint256 deadline
+        ) external {
+    // Approva l'importo dei token di input per il router di PancakeSwap
+    IERC20(tokenIn).approve(address(pancakeRouter), amountIn);
+
+    // Effettua lo swap sui token
+    pancakeRouter.swapExactTokensForTokens(
+        amountIn,
+        amountOutMin,
+        getPathForTokens(tokenIn, tokenOut),
+        to,
+        deadline
+    );
+    }
+
+    function getPathForTokens(address tokenIn, address tokenOut) private pure returns (address[] memory) {
+        address[] memory path = new address[](2);
+        path[0] = tokenIn;
+        path[1] = tokenOut;
+        return path;
     }
 
     // Transfers a specified amount of tokens from the sender to the recipient
