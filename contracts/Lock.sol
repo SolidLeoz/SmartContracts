@@ -1,4 +1,12 @@
 // SPDX-License-Identifier: MIT
+
+
+//#TODO: getOwnerRestituisce l'errore error:Failed to decode output: null: invalid codepoint at offset 10; unexpected continuation byte (argument="bytes", value=Uint8Arra(0x4f776e65723a200d3b07821a2425bf835c55ef6a725fd0fada7fbc), code=INVALID_ARGUMENT, version=strings/5.7.0)
+//#TODO: Le funzioni totalSuppli e currentTotalSupply restituiscono lo stesso valore, sono o da fixare o da unire
+//TODO: Vanno controllati i decimali del token e la total supply al momento della creazione, sembra non dare i decimali giusti
+//TODO: Controllare l'impostazione antywhale perchè non deve avviarsi se impostata a 0 e deve essere 0 come valore predefinito alla creazione del token
+//TODO: importare router pancakeSwap per permettere allo smartContract lo scambio tra il token creato e BNB
+
 pragma solidity ^0.8.0;
 
 import "@thirdweb-dev/contracts/eip/interface/IERC20.sol";
