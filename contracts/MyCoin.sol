@@ -3,8 +3,31 @@
 
 pragma solidity ^0.8.0;
 
-import "@thirdweb-dev/contracts/eip/interface/IERC20.sol";
+/**
+ * @title ERC20 interface
+ * @dev see https://github.com/ethereum/EIPs/issues/20
+ */
+interface IERC20 {
+    function totalSupply() external view returns (uint256);
 
+    function balanceOf(address who) external view returns (uint256);
+
+    function allowance(address owner, address spender) external view returns (uint256);
+
+    function transfer(address to, uint256 value) external returns (bool);
+
+    function approve(address spender, uint256 value) external returns (bool);
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 value
+    ) external returns (bool);
+
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    event Approval(address indexed owner, address indexed spender, uint256 value);
+}
 //safeMath library 
 library SafeMath {
     /**
@@ -392,6 +415,7 @@ contract Lock is IERC20 {
     address private _devWallet;
     address private _marketingWallet;
     address private _teamWallet;
+    address[] private _holders;
 
     // Anti-whale system
     uint256 private _maxWalletPercentage = 100;
@@ -461,16 +485,10 @@ contract Lock is IERC20 {
     function decimals() public view returns (uint8) {
         return _decimals;
     }
-
-    // Returns the circulating supply of the token
-    function currentTotalSupply() public view returns (uint256) {
-        return _totalSupply.sub(_balances[address(0)]);
-    }
-    
-
+  
     // Returns the total supply of the token
     function totalSupply() public view override returns (uint256) {
-        return _totalSupply;
+        return _totalSupply.sub(_balances[address(0)]);
     }
 
     // Returns the contract owner 
@@ -669,82 +687,142 @@ contract Lock is IERC20 {
 
     // Transfers a specified amount of tokens from the sender to the recipient
     function transfer(address recipient, uint256 amount) public override returns (bool) {
-        address sender = msg.sender;
-        require(_balances[sender] >= amount, "Insufficient balance");
+    address sender = msg.sender;
+    require(_balances[sender] >= amount, "Insufficient balance");
 
-        // Check if anti-whale system is active
-        if (_maxWalletPercentage > 0 && sender != _owner) {
-            uint256 maxWalletBalance = _totalSupply.mul(_maxWalletPercentage).div(100);
-            require(_balances[recipient].add(amount) <= maxWalletBalance, "Transfer would exceed the maximum wallet balance");
-        }
-
-        // Calculate burn and reflection amounts
-        uint256 burnAmount = amount.mul(_burnPercentage).div(100);
-        uint256 reflectionAmount = amount.mul(_reflectionPercentage).div(100);
-        uint256 totalFeeAmount = burnAmount.add(reflectionAmount);
-        uint256 transferAmount = amount.sub(totalFeeAmount);
-
-        // Update balances
-        _balances[sender] = _balances[sender].sub(amount);
-        _balances[recipient] = _balances[recipient].add(transferAmount);
-        _balances[address(0)] = _balances[address(0)].add(burnAmount);
-        _balances[_devWallet] = _balances[_devWallet].add(reflectionAmount.mul(_devFeePercentage).div(100));
-        _balances[_marketingWallet] = _balances[_marketingWallet].add(reflectionAmount.mul(_marketingFeePercentage).div(100));
-        _balances[_teamWallet] = _balances[_teamWallet].add(reflectionAmount.mul(_teamFeePercentage).div(100));
-
-        // Emit transfer and fee events
-        emit Transfer(sender, recipient, transferAmount);
-        emit Burn(sender, burnAmount);
-        emit TransferWithReflection(sender, address(0), reflectionAmount, reflectionAmount);
-        emit TransferWithReflection(sender, _devWallet, reflectionAmount.mul(_devFeePercentage).div(100), reflectionAmount);
-        emit TransferWithReflection(sender, _marketingWallet, reflectionAmount.mul(_marketingFeePercentage).div(100), reflectionAmount);
-        emit TransferWithReflection(sender, _teamWallet, reflectionAmount.mul(_teamFeePercentage).div(100), reflectionAmount);
-
-        return true;
+    // Check if anti-whale system is active
+    if (_maxWalletPercentage > 0 && sender != _owner) {
+        uint256 maxWalletBalance = _totalSupply.mul(_maxWalletPercentage).div(100);
+        require(_balances[recipient].add(amount) <= maxWalletBalance, "Transfer would exceed the maximum wallet balance");
     }
+
+    // Calculate burn and reflection amounts
+    uint256 burnAmount = amount.mul(_burnPercentage).div(100);
+    uint256 reflectionAmount = amount.mul(_reflectionPercentage).div(100);
+    uint256 totalFeeAmount = burnAmount.add(reflectionAmount);
+    uint256 transferAmount = amount.sub(totalFeeAmount);
+
+    // Update balances
+    _balances[sender] = _balances[sender].sub(amount);
+    _balances[recipient] = _balances[recipient].add(transferAmount);
+    _balances[address(0)] = _balances[address(0)].add(burnAmount);
+
+    // Distribute reflection amount to all holders
+    _distributeReflection(reflectionAmount);
+
+    // Emit transfer and fee events
+    emit Transfer(sender, recipient, transferAmount);
+    emit Burn(sender, burnAmount);
+    emit TransferWithReflection(sender, address(0), reflectionAmount, reflectionAmount);
+    emit TransferWithReflection(sender, _devWallet, reflectionAmount.mul(_devFeePercentage).div(100), reflectionAmount);
+    emit TransferWithReflection(sender, _marketingWallet, reflectionAmount.mul(_marketingFeePercentage).div(100), reflectionAmount);
+    emit TransferWithReflection(sender, _teamWallet, reflectionAmount.mul(_teamFeePercentage).div(100), reflectionAmount);
+
+    return true;
+}
+
+function _distributeReflection(uint256 reflectionAmount) private {
+    uint256 totalReflectionAmount = reflectionAmount;
+    uint256 totalHolders = _holders.length;
+    uint256 distributedReflectionAmount = 0;
+
+    for (uint256 i = 0; i < totalHolders; i++) {
+        address holder = _holders[i];
+        uint256 holderBalance = _balances[holder];
+
+        uint256 holderReflectionAmount = reflectionAmount.mul(holderBalance).div(_totalSupply);
+        _balances[holder] = holderBalance.add(holderReflectionAmount);
+        distributedReflectionAmount = distributedReflectionAmount.add(holderReflectionAmount);
+        emit TransferWithReflection(address(0), holder, holderReflectionAmount, holderReflectionAmount);
+    }
+
+    uint256 remainingReflectionAmount = totalReflectionAmount.sub(distributedReflectionAmount);
+    _balances[address(this)] = _balances[address(this)].add(remainingReflectionAmount);
+    emit TransferWithReflection(address(0), address(this), remainingReflectionAmount, remainingReflectionAmount);
+}
 
     // Transfers a specified amount of tokens from one account to another on behalf of the owner
     function transferFrom(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) public override returns (bool) {
-        require(_balances[sender] >= amount, "Insufficient balance");
-        require(_allowances[sender][msg.sender] >= amount, "Insufficient allowance");
+    address sender,
+    address recipient,
+    uint256 amount
+) public override returns (bool) {
+    require(_balances[sender] >= amount, "Insufficient balance");
+    require(_allowances[sender][msg.sender] >= amount, "Insufficient allowance");
 
-        // Check if anti-whale system is active
-        if (_maxWalletPercentage > 0 && recipient != _owner) {
-            uint256 maxWalletBalance = _totalSupply.mul(_maxWalletPercentage).div(100);
-            require(_balances[recipient].add(amount) <= maxWalletBalance, "Transfer would exceed the maximum wallet balance");
-        }
-
-        // Calculate burn and reflection amounts
-        uint256 burnAmount = amount.mul(_burnPercentage).div(100);
-        uint256 reflectionAmount = amount.mul(_reflectionPercentage).div(100);
-        uint256 totalFeeAmount = burnAmount.add(reflectionAmount);
-        uint256 transferAmount = amount.sub(totalFeeAmount);
-
-        // Update balances
-        _balances[sender] = _balances[sender].sub(amount);
-        _balances[recipient] = _balances[recipient].add(transferAmount);
-        _balances[address(0)] = _balances[address(0)].add(burnAmount);
-        _balances[_devWallet] = _balances[_devWallet].add(reflectionAmount.mul(_devFeePercentage).div(100));
-        _balances[_marketingWallet] = _balances[_marketingWallet].add(reflectionAmount.mul(_marketingFeePercentage).div(100));
-        _balances[_teamWallet] = _balances[_teamWallet].add(reflectionAmount.mul(_teamFeePercentage).div(100));
-
-        // Decrease allowance
-        _allowances[sender][msg.sender] = _allowances[sender][msg.sender].sub(amount);
-
-        // Emit transfer and fee events
-        emit Transfer(sender, recipient, transferAmount);
-        emit Burn(sender, burnAmount);
-        emit TransferWithReflection(sender, address(0), reflectionAmount, reflectionAmount);
-        emit TransferWithReflection(sender, _devWallet, reflectionAmount.mul(_devFeePercentage).div(100), reflectionAmount);
-        emit TransferWithReflection(sender, _marketingWallet, reflectionAmount.mul(_marketingFeePercentage).div(100), reflectionAmount);
-        emit TransferWithReflection(sender, _teamWallet, reflectionAmount.mul(_teamFeePercentage).div(100), reflectionAmount);
-
-        return true;
+    // Check if anti-whale system is active
+    if (_maxWalletPercentage > 0 && recipient != _owner) {
+        uint256 maxWalletBalance = _totalSupply.mul(_maxWalletPercentage).div(100);
+        require(_balances[recipient].add(amount) <= maxWalletBalance, "Transfer would exceed the maximum wallet balance");
     }
+
+    // Calculate burn and reflection amounts
+    uint256 burnAmount = amount.mul(_burnPercentage).div(100);
+    uint256 reflectionAmount = amount.mul(_reflectionPercentage).div(100);
+    uint256 totalFeeAmount = burnAmount.add(reflectionAmount);
+    uint256 transferAmount = amount.sub(totalFeeAmount);
+
+    // Update balances
+    _balances[sender] = _balances[sender].sub(amount);
+    _balances[recipient] = _balances[recipient].add(transferAmount);
+    _balances[address(0)] = _balances[address(0)].add(burnAmount);
+
+    // Update holders list
+    _updateHolders(sender, recipient);
+
+    // Calculate and distribute reflection per holder
+    uint256 reflectionPerHolder = reflectionAmount.div(_holders.length);
+    for (uint256 i = 0; i < _holders.length; i++) {
+        address holder = _holders[i];
+        _balances[holder] = _balances[holder].add(reflectionPerHolder);
+        emit TransferWithReflection(sender, holder, reflectionPerHolder, reflectionPerHolder);
+    }
+
+    // Send fees to marketing, dev, and team wallets
+    _balances[_marketingWallet] = _balances[_marketingWallet].add(reflectionAmount.mul(_marketingFeePercentage).div(100));
+    _balances[_devWallet] = _balances[_devWallet].add(reflectionAmount.mul(_devFeePercentage).div(100));
+    _balances[_teamWallet] = _balances[_teamWallet].add(reflectionAmount.mul(_teamFeePercentage).div(100));
+
+    // Decrease allowance
+    _allowances[sender][msg.sender] = _allowances[sender][msg.sender].sub(amount);
+
+    // Emit transfer and fee events
+    emit Transfer(sender, recipient, transferAmount);
+    emit Burn(sender, burnAmount);
+    emit TransferWithReflection(sender, address(0), reflectionAmount, reflectionAmount);
+    emit TransferWithReflection(sender, _devWallet, reflectionAmount.mul(_devFeePercentage).div(100), reflectionAmount);
+    emit TransferWithReflection(sender, _marketingWallet, reflectionAmount.mul(_marketingFeePercentage).div(100), reflectionAmount);
+    emit TransferWithReflection(sender, _teamWallet, reflectionAmount.mul(_teamFeePercentage).div(100), reflectionAmount);
+
+    return true;
+}
+
+function _updateHolders(address sender, address recipient) private {
+    if (_balances[sender] == 0) {
+        // Remove sender from holders list
+        for (uint256 i = 0; i < _holders.length; i++) {
+            if (_holders[i] == sender) {
+                _holders[i] = _holders[_holders.length - 1];
+                _holders.pop();
+                break;
+            }
+        }
+    }
+
+    if (_balances[recipient] > 0 && _balances[recipient].add(_reflectionPercentage) <= 1) {
+        // Add recipient to holders list if not already present
+        bool isRecipientInHolders = false;
+        for (uint256 i = 0; i < _holders.length; i++) {
+            if (_holders[i] == recipient) {
+                isRecipientInHolders = true;
+                break;
+            }
+        }
+        if (!isRecipientInHolders) {
+            _holders.push(recipient);
+        }
+    }
+}
 
     // Approves a specified amount of tokens to be spent by another account
     function approve(address spender, uint256 amount) public override returns (bool) {
