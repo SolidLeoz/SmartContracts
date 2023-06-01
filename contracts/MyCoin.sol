@@ -771,12 +771,7 @@ function _distributeReflection(uint256 reflectionAmount) private {
     _updateHolders(sender, recipient);
 
     // Calculate and distribute reflection per holder
-    uint256 reflectionPerHolder = reflectionAmount.div(_holders.length);
-    for (uint256 i = 0; i < _holders.length; i++) {
-        address holder = _holders[i];
-        _balances[holder] = _balances[holder].add(reflectionPerHolder);
-        emit TransferWithReflection(sender, holder, reflectionPerHolder, reflectionPerHolder);
-    }
+    _distributeReflection(reflectionAmount);
 
     // Send fees to marketing, dev, and team wallets
     _balances[_marketingWallet] = _balances[_marketingWallet].add(reflectionAmount.mul(_marketingFeePercentage).div(100));
