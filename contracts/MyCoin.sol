@@ -410,12 +410,19 @@ contract Lock is IERC20 {
     uint256 private _marketingFeePercentage;
     uint256 private _teamFeePercentage;
 
+    //update balance fee
+    uint256 private _totalDevFee;
+    uint256 private _totalMarketingFee;
+    uint256 private _totalTeamFee;
+
+
     // Token wallets
     address private _owner;
     address private _devWallet;
     address private _marketingWallet;
     address private _teamWallet;
     address[] private _holders;
+    
 
     // Anti-whale system
     uint256 private _maxWalletPercentage = 100;
@@ -665,6 +672,7 @@ contract Lock is IERC20 {
     address to,
     uint256 deadline
         ) external {
+            
     // Approva l'importo dei token di input per il router di PancakeSwap
     IERC20(tokenIn).approve(address(pancakeRouter), amountIn);
 
@@ -696,32 +704,35 @@ contract Lock is IERC20 {
         require(_balances[recipient].add(amount) <= maxWalletBalance, "Transfer would exceed the maximum wallet balance");
     }
 
-    // Calculate burn and reflection amounts
+     // Calculate fee amounts
     uint256 burnAmount = amount.mul(_burnPercentage).div(100);
     uint256 reflectionAmount = amount.mul(_reflectionPercentage).div(100);
-    uint256 totalFeeAmount = burnAmount.add(reflectionAmount);
-    uint256 transferAmount = amount.sub(totalFeeAmount);
+    uint256 devFeeAmount = amount.mul(_devFeePercentage).div(100);
+    uint256 marketingFeeAmount = amount.mul(_marketingFeePercentage).div(100);
+    uint256 teamFeeAmount = amount.mul(_teamFeePercentage).div(100);
 
+    // Subtract fee amounts from the transfer amount
+    uint256 transferAmount = amount;
+    transferAmount = transferAmount.sub(burnAmount);
+    transferAmount = transferAmount.sub(reflectionAmount);
+    transferAmount = transferAmount.sub(devFeeAmount);
+    transferAmount = transferAmount.sub(marketingFeeAmount);
+    transferAmount = transferAmount.sub(teamFeeAmount);
+    
     // Update balances
     _balances[sender] = _balances[sender].sub(amount);
     _balances[recipient] = _balances[recipient].add(transferAmount);
     _balances[address(0)] = _balances[address(0)].add(burnAmount);
+    _balances[_devWallet] = _balances[_devWallet].add(devFeeAmount);
+    _balances[_marketingWallet] = _balances[_marketingWallet].add(marketingFeeAmount);
+    _balances[_teamWallet] = _balances[_teamWallet].add(teamFeeAmount);
+
+    // Update total fee amounts
+    _totalDevFee = _totalDevFee.add(devFeeAmount);
+    _totalMarketingFee = _totalMarketingFee.add(marketingFeeAmount);
+    _totalTeamFee = _totalTeamFee.add(teamFeeAmount);
 
     // Distribute reflection amount to all holders
-    _distributeReflection(reflectionAmount);
-
-    // Emit transfer and fee events
-    emit Transfer(sender, recipient, transferAmount);
-    emit Burn(sender, burnAmount);
-    emit TransferWithReflection(sender, address(0), reflectionAmount, reflectionAmount);
-    emit TransferWithReflection(sender, _devWallet, reflectionAmount.mul(_devFeePercentage).div(100), reflectionAmount);
-    emit TransferWithReflection(sender, _marketingWallet, reflectionAmount.mul(_marketingFeePercentage).div(100), reflectionAmount);
-    emit TransferWithReflection(sender, _teamWallet, reflectionAmount.mul(_teamFeePercentage).div(100), reflectionAmount);
-
-    return true;
-}
-
-function _distributeReflection(uint256 reflectionAmount) private {
     uint256 totalReflectionAmount = reflectionAmount;
     uint256 totalHolders = _holders.length;
     uint256 distributedReflectionAmount = 0;
@@ -739,10 +750,41 @@ function _distributeReflection(uint256 reflectionAmount) private {
     uint256 remainingReflectionAmount = totalReflectionAmount.sub(distributedReflectionAmount);
     _balances[address(this)] = _balances[address(this)].add(remainingReflectionAmount);
     emit TransferWithReflection(address(0), address(this), remainingReflectionAmount, remainingReflectionAmount);
+
+    // Emit transfer and fee events
+    emit Transfer(sender, recipient, transferAmount);
+    emit Burn(sender, burnAmount);
+    emit TransferWithReflection(sender, address(0), reflectionAmount, reflectionAmount);
+    emit TransferWithReflection(sender, _devWallet, reflectionAmount.mul(_devFeePercentage).div(100), reflectionAmount);
+    emit TransferWithReflection(sender, _marketingWallet, reflectionAmount.mul(_marketingFeePercentage).div(100), reflectionAmount);
+    emit TransferWithReflection(sender, _teamWallet, reflectionAmount.mul(_teamFeePercentage).div(100), reflectionAmount);
+
+    return true;
+}
+
+
+function _distributeReflection(uint256 reflectionAmount) private {
+    uint256 totalHolders = _holders.length;
+    uint256 distributedReflectionAmount = 0;
+
+    for (uint256 i = 0; i < totalHolders; i++) {
+        address holder = _holders[i];
+        uint256 holderBalance = _balances[holder];
+
+        uint256 holderReflectionAmount = reflectionAmount.mul(holderBalance).div(_totalSupply);
+        _balances[holder] = holderBalance.add(holderReflectionAmount);
+        distributedReflectionAmount = distributedReflectionAmount.add(holderReflectionAmount);
+        emit Transfer(address(0), holder, holderReflectionAmount);
+    }
+
+    uint256 remainingReflection = reflectionAmount.sub(distributedReflectionAmount);
+    _balances[address(this)] = _balances[address(this)].add(remainingReflection);
+    emit Transfer(address(0), address(this), remainingReflection);
 }
 
     // Transfers a specified amount of tokens from one account to another on behalf of the owner
-    function transferFrom(
+    // Transfers a specified amount of tokens from one account to another on behalf of the owner
+function transferFrom(
     address sender,
     address recipient,
     uint256 amount
@@ -756,38 +798,51 @@ function _distributeReflection(uint256 reflectionAmount) private {
         require(_balances[recipient].add(amount) <= maxWalletBalance, "Transfer would exceed the maximum wallet balance");
     }
 
+    // Subtract the amount from the allowance
+    _allowances[sender][msg.sender] = _allowances[sender][msg.sender].sub(amount);
+
     // Calculate burn and reflection amounts
     uint256 burnAmount = amount.mul(_burnPercentage).div(100);
     uint256 reflectionAmount = amount.mul(_reflectionPercentage).div(100);
-    uint256 totalFeeAmount = burnAmount.add(reflectionAmount);
-    uint256 transferAmount = amount.sub(totalFeeAmount);
+    uint256 devFeeAmount = amount.mul(_devFeePercentage).div(100);
+    uint256 marketingFeeAmount = amount.mul(_marketingFeePercentage).div(100);
+    uint256 teamFeeAmount = amount.mul(_teamFeePercentage).div(100);
 
-    // Update balances
+    // Subtract the total transfer amount from the sender's balance
     _balances[sender] = _balances[sender].sub(amount);
-    _balances[recipient] = _balances[recipient].add(transferAmount);
+
+    // Subtract the burn amount from the total supply
+    _totalSupply = _totalSupply.sub(burnAmount);
+
+    // Subtract the total fee amounts from the sender's balance
+    _balances[sender] = _balances[sender].sub(reflectionAmount);
+    _balances[sender] = _balances[sender].sub(devFeeAmount);
+    _balances[sender] = _balances[sender].sub(marketingFeeAmount);
+    _balances[sender] = _balances[sender].sub(teamFeeAmount);
+
+    // Add the transfer amount to the recipient's balance
+    _balances[recipient] = _balances[recipient].add(amount).sub(burnAmount);
+
+    // Add the burn amount to the burn wallet's balance
     _balances[address(0)] = _balances[address(0)].add(burnAmount);
 
-    // Update holders list
-    _updateHolders(sender, recipient);
+    // Add the fee amounts to the respective wallets' balances
+    _balances[_devWallet] = _balances[_devWallet].add(devFeeAmount);
+    _balances[_marketingWallet] = _balances[_marketingWallet].add(marketingFeeAmount);
+    _balances[_teamWallet] = _balances[_teamWallet].add(teamFeeAmount);
 
-    // Calculate and distribute reflection per holder
-    _distributeReflection(reflectionAmount);
-
-    // Send fees to marketing, dev, and team wallets
-    _balances[_marketingWallet] = _balances[_marketingWallet].add(reflectionAmount.mul(_marketingFeePercentage).div(100));
-    _balances[_devWallet] = _balances[_devWallet].add(reflectionAmount.mul(_devFeePercentage).div(100));
-    _balances[_teamWallet] = _balances[_teamWallet].add(reflectionAmount.mul(_teamFeePercentage).div(100));
-
-    // Decrease allowance
-    _allowances[sender][msg.sender] = _allowances[sender][msg.sender].sub(amount);
+    // Update total fee amounts
+    _totalDevFee = _totalDevFee.add(devFeeAmount);
+    _totalMarketingFee = _totalMarketingFee.add(marketingFeeAmount);
+    _totalTeamFee = _totalTeamFee.add(teamFeeAmount);
 
     // Emit transfer and fee events
-    emit Transfer(sender, recipient, transferAmount);
+    emit Transfer(sender, recipient, amount);
     emit Burn(sender, burnAmount);
     emit TransferWithReflection(sender, address(0), reflectionAmount, reflectionAmount);
-    emit TransferWithReflection(sender, _devWallet, reflectionAmount.mul(_devFeePercentage).div(100), reflectionAmount);
-    emit TransferWithReflection(sender, _marketingWallet, reflectionAmount.mul(_marketingFeePercentage).div(100), reflectionAmount);
-    emit TransferWithReflection(sender, _teamWallet, reflectionAmount.mul(_teamFeePercentage).div(100), reflectionAmount);
+    emit TransferWithReflection(sender, _devWallet, devFeeAmount, reflectionAmount);
+    emit TransferWithReflection(sender, _marketingWallet, marketingFeeAmount, reflectionAmount);
+    emit TransferWithReflection(sender, _teamWallet, teamFeeAmount, reflectionAmount);
 
     return true;
 }
@@ -845,5 +900,17 @@ function _updateHolders(address sender, address recipient) private {
         _allowances[msg.sender][spender] = currentAllowance.sub(subtractedValue);
         emit Approval(msg.sender, spender, _allowances[msg.sender][spender]);
         return true;
+    }
+
+    function getTotalDevFee() public view returns (uint256) {
+        return _totalDevFee;
+    }
+
+    function getTotalMarketingFee() public view returns (uint256) {
+        return _totalMarketingFee;
+    }
+
+    function getTotalTeamFee() public view returns (uint256) {
+        return _totalTeamFee;
     }
 }
